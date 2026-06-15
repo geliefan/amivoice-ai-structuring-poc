@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { ActionTriagePanel } from "@/components/ActionTriagePanel";
 import { CopyButton } from "@/components/CopyButton";
+import { LowConfidenceTerms } from "@/components/LowConfidenceTerms";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { ModeSelector } from "@/components/ModeSelector";
 import { ProviderStatus } from "@/components/ProviderStatus";
@@ -271,6 +273,14 @@ export function ConvertForm({ providerStatus }: { providerStatus: ProviderStatus
             </details>
           )}
         </section>
+      )}
+
+      {transcription?.lowConfidenceTerms && transcription.lowConfidenceTerms.length > 0 && (
+        <LowConfidenceTerms terms={transcription.lowConfidenceTerms} />
+      )}
+
+      {structured?.triage && (
+        <ActionTriagePanel triage={structured.triage} markdown={structured.markdown} />
       )}
 
       {structured && (

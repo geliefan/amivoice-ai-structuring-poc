@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { extractLowConfidenceTerms } from "./lowConfidence";
 import {
   AmiVoiceApiError,
   type AmiVoiceRecognizeResponse,
@@ -109,6 +110,9 @@ export class AmiVoiceSyncHttpClient implements TranscriptionClient {
       text,
       raw: json,
       provider: "amivoice",
+      // Token-level low-confidence terms. Empty when AmiVoice returns no
+      // per-token confidence (we never fabricate terms).
+      lowConfidenceTerms: extractLowConfidenceTerms(json.results),
     };
   }
 }

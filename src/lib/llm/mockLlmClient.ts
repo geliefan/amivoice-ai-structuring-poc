@@ -1,3 +1,5 @@
+import type { ActionTriage } from "@/types";
+import { ACTION_LABELS, buildTriageMarkdown } from "./actionTriage";
 import type { LlmClient, StructureInput, StructureResult } from "./types";
 
 /**
@@ -11,11 +13,76 @@ const firstFragment = (text: string, maxLength: number): string => {
   return base.length > maxLength ? `${base.slice(0, maxLength)}…` : base;
 };
 
-const buildMockIssueMarkdown = (text: string): string => {
+/** Patterns hinting at speech-recognition garbling of technical terms. */
+const MISRECOGNITION_PATTERN =
+  /誤変換|ご返還|ケースリ|サートリゾルバ|今ポーズアップ|オープンスパー|キッチンのリポジトリ|リフィルのイングレス|キューブコントロール|茶葉|ギッキー/;
+
+/** Patterns hinting at concrete, reproducible-enough problems. */
+const CONCRETE_PATTERN =
+  /エラー|失敗|落ち|再現|ログ|例外|タイムアウト|スタックトレース|クラッシュ|500|crash/i;
+
+/** Patterns hinting at subjective / uncertain memos. */
+const SUBJECTIVE_PATTERN =
+  /気がする|気のせい|かもしれない|かも。|かも$|なんか|もやもや|自分だけ/;
+
+/**
+ * Heuristic mock triage. The real provider lets Gemini decide; the mock
+ * approximates the three article scenarios (GO / STOP / HOLD) from the text
+ * so the UI difference is visible without an API key.
+ */
+const decideMockTriage = (text: string): ActionTriage => {
+  const t = text.trim();
+
+  if (MISRECOGNITION_PATTERN.test(t)) {
+    return {
+      recommendedAction: "investigation_note",
+      actionLabel: ACTION_LABELS.investigation_note,
+      actionRationale:
+        "技術用語の誤認識候補が複数含まれており、文字起こし信頼度が低いと判断しました。確定情報として扱える内容が乏しいため、まず人間が用語を確認する必要があります。",
+      blockedReason:
+        "k3s / Traefik / certresolver / docker compose 等に相当する語句が誤認識されている可能性があり、確定情報としてIssue本文に書けません。誤った前提のIssueを作らないため、Issue化は保留します。",
+      shouldCreateIssue: false,
+    };
+  }
+
+  if (CONCRETE_PATTERN.test(t) && !SUBJECTIVE_PATTERN.test(t)) {
+    return {
+      recommendedAction: "issue",
+      actionLabel: ACTION_LABELS.issue,
+      actionRationale:
+        "具体的な事象（エラー・失敗・ログ等）が述べられており、調査の起点となる事実が確認できます。再現条件・影響範囲は未確認事項として残しつつ、Issueとして起票して追跡する価値があります。",
+      shouldCreateIssue: true,
+    };
+  }
+
+  if (SUBJECTIVE_PATTERN.test(t)) {
+    return {
+      recommendedAction: "save_only",
+      actionLabel: ACTION_LABELS.save_only,
+      actionRationale:
+        "主観的な違和感が中心で、再現条件・対象環境・影響範囲・期待結果が不足しています。現時点ではアクション化の材料が揃っていません。",
+      blockedReason:
+        "再現条件・対象環境・影響範囲・期待結果のいずれも確認できず、このままIssue化すると曖昧な前提が記録されてしまいます。まずはメモとして保存し、追加情報が集まってから判断します。",
+      shouldCreateIssue: false,
+    };
+  }
+
+  return {
+    recommendedAction: "investigation_note",
+    actionLabel: ACTION_LABELS.investigation_note,
+    actionRationale:
+      "現象や気づきはあるものの、再現条件や影響範囲などIssue化に必要な情報が不足しています。",
+    blockedReason:
+      "Issue化に必要な再現条件・影響範囲が不足しているため、まず調査メモとして扱い、不足情報を確認します。",
+    shouldCreateIssue: false,
+  };
+};
+
+const buildMockIssueBody = (text: string): string => {
   const trimmed = text.trim();
   const titleFragment = firstFragment(trimmed, 30) || "（入力テキストなし）";
 
-  return `# タイトル案
+  return `# Issueタイトル案
 
 (mock) ${titleFragment} の調査・確認
 
@@ -93,13 +160,6 @@ Gemini API利用時に行われます）。
 ## 概要
 入力メモをもとにした調査・確認用のIssueです（mock出力）。
 
-## 文字起こし信頼度
-
-高
-
-### 判断理由
-- mock出力のため、音声認識特有の誤認識・表記揺れの判定はGemini API利用時に行われます。
-
 ## 起きていること
 > ${trimmed || "(入力テキストが空です)"}
 
@@ -114,14 +174,92 @@ Gemini API利用時に行われます）。
 - 発生頻度・再現性
 - 影響範囲
 
-## 文字起こし確認候補
-特になし（mock出力）
-
 ## 次にやること
 - [ ] ログ・設定・環境変数を確認する
 - [ ] 未確認事項を切り分ける
 - [ ] 対応方針を決める
 `;
+};
+
+/** Per-action document heading for non-Issue output (avoids "タイトル案"). */
+const NON_ISSUE_HEADING: Record<string, string> = {
+  investigation_note: "調査メモの見出し案",
+  save_only: "保存メモの見出し案",
+  question_template: "質問タイトル案",
+  runbook_candidate: "Runbook候補の見出し案",
+  backlog_candidate: "Backlog候補の見出し案",
+  no_action: "メモの見出し案",
+};
+
+const buildMockNonIssueBody = (text: string, triage: ActionTriage): string => {
+  const trimmed = text.trim();
+  const isHold = MISRECOGNITION_PATTERN.test(trimmed);
+  const heading =
+    NON_ISSUE_HEADING[triage.recommendedAction] ?? "調査メモの見出し案";
+
+  const confidence = isHold ? "低" : "中";
+  const confidenceReason = isHold
+    ? "- 技術用語らしき誤認識候補が複数含まれている（mock判定）。"
+    : "- mock判定のため、詳細な誤認識検出はGemini API利用時に行われます。";
+
+  const checkCandidates = isHold
+    ? `| 文字起こし結果 | 補正候補 | 理由 | 確認優先度 |
+|---|---|---|---|
+| ケースリース | k3s | バージョン文脈からk3sの可能性 | 高 |
+| トラフィック | Traefik | Ingress文脈での技術用語の可能性 | 高 |
+| サートリゾルバー | certresolver | TLS証明書設定の文脈での可能性 | 高 |
+| 今ポーズアップのD | docker compose up -d | コマンドの誤認識の可能性。断定不可 | 高 |`
+    : "特になし（mock出力）。";
+
+  return `# ${heading}
+
+## このメモについて
+
+推奨アクションは「${triage.actionLabel}」です。確定的なIssue本文は作成せず、
+追加で確認すべきことを中心に整理しています（mock出力）。
+
+## 背景
+
+- メモの内容:
+  > ${trimmed || "(入力テキストが空です)"}
+
+## 文字起こし信頼度
+
+${confidence}
+
+### 判断理由
+${confidenceReason}
+
+## 追加で確認すべきこと
+
+- 再現条件（いつ・どの環境・どの操作で起きるか）。
+- 影響範囲（他の機能・他の利用者にも影響するか）。
+- 期待する状態と実際の状態の差分。
+${isHold ? "- 誤認識候補の語句が、実際に何を指すか（下記「文字起こし確認候補」を参照）。" : ""}
+
+## 文字起こし確認候補
+
+${checkCandidates}
+
+## メモとして保存する場合のMarkdown
+
+# ${firstFragment(trimmed, 30) || "（入力テキストなし）"}（調査メモ・Issue化前）
+
+## 状況
+> ${trimmed || "(入力テキストが空です)"}
+
+## まだ確認できていないこと
+- 再現条件 / 対象環境 / 影響範囲 / 期待結果
+${isHold ? "- 誤認識候補（ケースリース→k3s 等）の確定" : ""}
+`;
+};
+
+const buildMockIssueMarkdown = (text: string, triage: ActionTriage): string => {
+  const triageMarkdown = buildTriageMarkdown(triage);
+  const body = triage.shouldCreateIssue
+    ? buildMockIssueBody(text)
+    : buildMockNonIssueBody(text, triage);
+  return `${triageMarkdown}\n\n---\n\n${body}`;
 };
 
 const buildMockReflectionMarkdown = (text: string): string => {
@@ -202,15 +340,20 @@ const buildMockReflectionMarkdown = (text: string): string => {
 
 export class MockLlmClient implements LlmClient {
   async structure(input: StructureInput): Promise<StructureResult> {
-    const markdown =
-      input.mode === "issue"
-        ? buildMockIssueMarkdown(input.text)
-        : buildMockReflectionMarkdown(input.text);
+    if (input.mode === "reflection") {
+      return {
+        markdown: buildMockReflectionMarkdown(input.text),
+        provider: "mock",
+        mode: "reflection",
+      };
+    }
 
+    const triage = decideMockTriage(input.text);
     return {
-      markdown,
+      markdown: buildMockIssueMarkdown(input.text, triage),
       provider: "mock",
-      mode: input.mode,
+      mode: "issue",
+      triage,
     };
   }
 }

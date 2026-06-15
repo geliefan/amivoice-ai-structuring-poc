@@ -1,5 +1,6 @@
 import type { Sample } from "@/lib/samples/sampleData";
 import { CopyButton } from "./CopyButton";
+import { LowConfidenceTerms } from "./LowConfidenceTerms";
 import { MarkdownPreview } from "./MarkdownPreview";
 
 const SCORE_LABELS: Record<keyof Sample["scores"], string> = {
@@ -42,6 +43,11 @@ export function SampleCard({ sample }: { sample: Sample }) {
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-gray-50 p-3 text-sm leading-relaxed dark:bg-gray-800">
             {sample.input}
           </pre>
+          {sample.lowConfidenceTerms && sample.lowConfidenceTerms.length > 0 && (
+            <div className="mt-3">
+              <LowConfidenceTerms terms={sample.lowConfidenceTerms} />
+            </div>
+          )}
         </section>
 
         <section>

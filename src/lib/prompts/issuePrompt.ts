@@ -1,3 +1,47 @@
+import type { LowConfidenceTerm } from "@/types";
+
+/**
+ * Renders the AmiVoice low-confidence terms block injected into the prompt.
+ * Returns an empty string when there are no terms, so text-only structuring
+ * (no AmiVoice input) is unaffected.
+ */
+const buildLowConfidenceBlock = (terms?: LowConfidenceTerm[]): string => {
+  if (!terms || terms.length === 0) return "";
+
+  const lines = terms
+    .map((t) => {
+      const conf =
+        typeof t.confidence === "number"
+          ? ` (confidence: ${t.confidence})`
+          : "";
+      const rank = t.rank ? `[${t.rank}] ` : "";
+      return `- ${rank}「${t.text}」${conf}: ${t.reason}`;
+    })
+    .join("\n");
+
+  return `
+# AmiVoice由来の低信頼語句（token-level confidence）
+
+以下はAmiVoiceのtoken単位の信頼度に基づき、認識信頼度が低い、または確認が
+必要と判定された語句です（発話全体の信頼度が高くても、技術用語だけ局所的に
+低いことがあります）。
+
+${lines}
+
+これらの語句の扱い:
+- 確定情報として本文（事実・起きていること・タイトル）に断定で書かない。
+- 技術用語・固有名詞・コマンド・環境名・バージョンらしき低信頼語句は、
+  「文字起こし確認候補」に分離する。
+- 環境名・製品名・コマンド・バージョン・原因候補に関わる低信頼語句が
+  複数ある場合は、Issue化を安易に推奨せず「調査メモ」または人間確認待ちに
+  倒すこと。
+- ただし、低信頼語句が少なく、再現条件・期待結果・実際の結果・影響範囲が
+  明確な場合は、Issue化を完全には禁止しない（その旨を判断理由に書く）。
+- 低信頼語句を勝手に正しい技術用語へ自動補正・断定しない。目的は補正では
+  なく人間確認に回すこと。
+`;
+};
+
 /**
  * Prompt for "Issue Mode": turns a raw, unstructured spoken memo into a
  * Markdown document that can be pasted directly into a GitHub/Gitea issue.
@@ -7,7 +51,10 @@
  * anything ambiguous (including transcription errors) into a confirmation
  * list instead of silently deciding.
  */
-export const buildIssuePrompt = (transcript: string): string => `
+export const buildIssuePrompt = (
+  transcript: string,
+  lowConfidenceTerms?: LowConfidenceTerm[],
+): string => `
 あなたは、エンジニアの未整理な音声メモを、そのままIssueに貼り付けられる
 Markdownドキュメントに変換するアシスタントです。
 
@@ -37,6 +84,37 @@ Markdownドキュメントに変換するアシスタントです。
 ---
 ${transcript}
 ---
+${buildLowConfidenceBlock(lowConfidenceTerms)}
+# 最重要: まず「アクション化してよいか」を判定する
+
+このアシスタントの主目的は、きれいなIssueを作ることではありません。
+**この音声メモを、今すぐIssue化してよいかを先に判定し、人間が最終判断
+できる材料を提示すること**が主目的です。安易にIssue化を推奨せず、
+材料が足りなければ止めてください。
+
+出力の冒頭で、必ず次のいずれか1つを「推奨アクション」として選びます。
+
+- Issue化: 再現条件・期待結果・実際の結果・影響範囲がある程度揃っている。
+- 調査メモ: 現象はあるが、再現条件や影響範囲が不足している。
+- 質問テンプレ: 相手（メンバー・他チーム等）に確認すべき内容が中心。
+- Runbook候補: 手順・運用メモが中心。
+- Backlog候補: アイデア・改善案だが緊急性が低い。
+- 保存のみ: 主観的な違和感・愚痴・感情・未確認の仮説が中心。
+- 何もしない: 内容が薄すぎる、またはアクション化する材料がない。
+
+判定で特に守ること:
+
+- **文字起こし信頼度が「低」の場合は、Issue化を安易に推奨しない**
+  （多くの場合「調査メモ」になる。誤った前提のIssueを作らせない）。
+- **技術用語の誤認識候補がある場合、その語句を確定情報としてIssue本文に
+  入れない**。確認候補として分離する。
+- きれいなIssueに見せるために情報を補完しない。不確実な情報は分離する。
+- **推奨アクションが「Issue化」のときだけ、Issue本文（タイトル〜貼り付け用
+  Markdown）を主役として詳しく書く。**
+- 推奨アクションが「調査メモ」「保存のみ」等の場合は、Issue本文を主役に
+  せず、「追加で確認すべきこと（未確認事項）」を重視して書く。この場合、
+  最後の貼り付け用Markdownは簡潔な調査メモ（確認事項中心）にとどめ、
+  確定的なIssue本文を作らない。
 
 # 厳守ルール
 
@@ -197,8 +275,40 @@ ${transcript}
 以下の見出し構成・順序を必ず守り、Markdownとして出力すること。
 該当する内容がない場合は「特になし」または「情報なし」と記載する。
 
+冒頭の「判定」ブロックは必ず最初に出力すること。
+
+- 「## 推奨アクション」の直下には、上記7つのラベルのうち**1つだけ**を、
+  余計な語を付けず単独の行で書くこと（例: \`調査メモ\`）。プログラムが
+  この行をそのまま読み取るため、説明や括弧書きを付けないこと。
+- 推奨アクションが「Issue化」の場合は「## Issue化してよい理由」を、
+  それ以外の場合は「## Issue化を止める理由」を出力すること
+  （どちらか一方のみ）。
+- 本文先頭の見出し（下記スケルトンの「# 見出し案」）は、推奨アクションが
+  「Issue化」のときだけ「# Issueタイトル案」とすること。Issue化しない
+  場合は、Issue生成と誤解されないよう、推奨アクションに応じて次の表現に
+  変えること（「タイトル案」という語は使わない）。
+  - Issue化 → \`# Issueタイトル案\`
+  - 調査メモ → \`# 調査メモの見出し案\`
+  - 保存のみ → \`# 保存メモの見出し案\`
+  - 質問テンプレ → \`# 質問タイトル案\`
+  - Runbook候補 → \`# Runbook候補の見出し案\`
+  - Backlog候補 → \`# Backlog候補の見出し案\`
+  - 何もしない → \`# メモの見出し案\`
+
 \`\`\`markdown
-# タイトル案
+# 判定（アクション前処理レイヤー）
+
+## 推奨アクション
+
+（上記7ラベルのいずれか1つだけを単独行で）
+
+## 判断理由
+
+## Issue化してよい理由 ／ Issue化を止める理由
+
+---
+
+# 見出し案（推奨アクションに応じた表現にする。上記マッピング参照）
 
 ## 概要
 
@@ -237,4 +347,9 @@ ${transcript}
 確認ポイントだ」と分かるようにすること。文字起こし信頼度が「低」の場合は、
 このMarkdown本文にも「文字起こし信頼度が『低』の場合」の本文ルールを
 適用すること。
+
+推奨アクションが「Issue化」**以外**の場合は、この最後のセクションの
+見出しを「## メモとして使う場合のMarkdown」とし、確定的なIssue本文では
+なく、確認事項・未確認事項を中心とした簡潔なメモにとどめること
+（断定的なIssueを作らない）。
 `;

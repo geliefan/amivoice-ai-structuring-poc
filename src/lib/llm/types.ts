@@ -1,3 +1,5 @@
+import type { ActionTriage, LowConfidenceTerm } from "@/types";
+
 export type LlmProvider = "mock" | "gemini";
 
 export type StructureMode = "issue" | "reflection";
@@ -5,12 +7,19 @@ export type StructureMode = "issue" | "reflection";
 export type StructureInput = {
   mode: StructureMode;
   text: string;
+  /**
+   * AmiVoice-derived low-confidence terms (Issue Mode). Passed to the prompt
+   * so the model treats them as "do not confirm as fact" hints. Optional.
+   */
+  lowConfidenceTerms?: LowConfidenceTerm[];
 };
 
 export type StructureResult = {
   markdown: string;
   provider: LlmProvider;
   mode: StructureMode;
+  /** Action triage, populated for Issue Mode only. */
+  triage?: ActionTriage;
 };
 
 export interface LlmClient {

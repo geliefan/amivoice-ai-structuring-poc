@@ -34,6 +34,19 @@ export class MockTranscriptionClient implements TranscriptionClient {
     return {
       text,
       provider: "mock",
+      // The mock transcript is a clean (high-confidence) memo, so it keeps a
+      // GO-eligible triage. A single warning-level pseudo term is included so
+      // the low-confidence UI is exercisable without an AmiVoice key. Real
+      // garbled-term examples live in the /samples HOLD entries.
+      lowConfidenceTerms: [
+        {
+          text: "Secret",
+          confidence: 0.71,
+          rank: "warning",
+          reason:
+            "mock: 英語の固有名詞のため確認推奨（疑似データ。実AmiVoiceではtoken信頼度に基づきます）",
+        },
+      ],
       raw: {
         mock: true,
         receivedFile: {

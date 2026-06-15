@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { buildIssuePrompt } from "@/lib/prompts/issuePrompt";
 import { buildReflectionPrompt } from "@/lib/prompts/reflectionPrompt";
+import { parseIssueTriage } from "./actionTriage";
 import {
   GeminiApiError,
   type LlmClient,
@@ -41,7 +42,7 @@ export class GeminiClient implements LlmClient {
 
     const prompt =
       input.mode === "issue"
-        ? buildIssuePrompt(input.text)
+        ? buildIssuePrompt(input.text, input.lowConfidenceTerms)
         : buildReflectionPrompt(input.text);
 
     const url = `${GEMINI_API_BASE}/models/${env.geminiModel}:generateContent`;
@@ -112,10 +113,18 @@ export class GeminiClient implements LlmClient {
       );
     }
 
+    const cleanedMarkdown = stripCodeFence(markdown);
+
     return {
-      markdown: stripCodeFence(markdown),
+      markdown: cleanedMarkdown,
       provider: "gemini",
       mode: input.mode,
+      // Action triage only applies to Issue Mode. Parsed from the structured
+      // Markdown the prompt is instructed to emit.
+      triage:
+        input.mode === "issue"
+          ? parseIssueTriage(cleanedMarkdown)
+          : undefined,
     };
   }
 }

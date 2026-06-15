@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { StructureMode } from "@/types";
+import type { LowConfidenceTerm, StructureMode } from "@/types";
 
 export type EvaluationScores = {
   /** 事実と推測が分離されているか */
@@ -26,6 +26,12 @@ export type Sample = {
   scores: EvaluationScores;
   /** Free-text evaluation notes (what works well / what to watch for). */
   notes: string;
+  /**
+   * AmiVoice-derived low-confidence terms for this scenario. Present on HOLD
+   * samples to show the recognition-engine basis for holding off on Issue
+   * creation. (mock-flavored values; real values come from AmiVoice tokens.)
+   */
+  lowConfidenceTerms?: LowConfidenceTerm[];
 };
 
 const SAMPLES_DIR = path.join(process.cwd(), "samples");
@@ -34,6 +40,79 @@ const readSample = (relativePath: string): string =>
   fs.readFileSync(path.join(SAMPLES_DIR, relativePath), "utf-8").trim();
 
 export const samples: Sample[] = [
+  {
+    id: "issue-stop-01",
+    mode: "issue",
+    title: "【STOP例】主観的な違和感のみ・Issue化を止めるケース",
+    scenario:
+      "「なんか管理画面が重い気がする」という、再現条件も影響範囲もない" +
+      "主観的な音声メモ。すぐにIssue化せず止めるべきケースの想定。",
+    input: readSample("issue/issue-stop-01-input.md"),
+    output: readSample("issue/issue-stop-01-output.md"),
+    scores: {
+      factVsGuess: 3,
+      actionable: 3,
+      noOverclaim: 3,
+      preservesNuance: 3,
+      pasteReady: 3,
+    },
+    notes:
+      "アクション前処理レイヤーの中核デモ。推奨アクションを「保存のみ」と判定し、" +
+      "「再現条件・対象環境・影響範囲・期待結果が不足している」ことを" +
+      "『Issue化を止める理由』として明示できている。きれいなIssue本文を" +
+      "生成せず、追加で確認すべきことに振り向けている点が重要。",
+  },
+  {
+    id: "issue-hold-01",
+    mode: "issue",
+    title: "【HOLD例】技術用語の誤認識が多く人間確認が必要なケース",
+    scenario:
+      "「ケースリース」「トラフィック」「サートリゾルバー」「今ポーズアップのD」" +
+      "など、k3s / Traefik / certresolver / docker compose の誤認識候補を含む" +
+      "音声メモ。確定情報として扱えず、Issue化を保留すべきケースの想定。",
+    input: readSample("issue/issue-hold-01-input.md"),
+    output: readSample("issue/issue-hold-01-output.md"),
+    scores: {
+      factVsGuess: 3,
+      actionable: 3,
+      noOverclaim: 3,
+      preservesNuance: 2,
+      pasteReady: 3,
+    },
+    notes:
+      "推奨アクションを「調査メモ」とし、文字起こし信頼度「低」を根拠に" +
+      "Issue化を保留している。誤認識候補（k3s / Traefik / certresolver /" +
+      "`docker compose up -d`）を補正候補として提示しつつ、確定情報として" +
+      "Issue本文に書かない設計の実例。生成AIに任せきらず人間が確認する導線を示す。" +
+      "AmiVoiceのtoken-level confidenceが低い語句が複数あることが、" +
+      "Issue化保留の客観的な根拠になっている。",
+    lowConfidenceTerms: [
+      {
+        text: "ケースリース",
+        confidence: 0.25,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（k3sの可能性）。確定情報として扱わない",
+      },
+      {
+        text: "トラフィック",
+        confidence: 0.51,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（Traefikの可能性）。確定情報として扱わない",
+      },
+      {
+        text: "サートリゾルバー",
+        confidence: 0.42,
+        rank: "critical",
+        reason: "設定名の誤認識候補（certresolverの可能性）。確定情報として扱わない",
+      },
+      {
+        text: "今ポーズアップのD",
+        confidence: 0.54,
+        rank: "critical",
+        reason: "コマンドの誤認識候補（docker compose up -d の可能性）。断定不可",
+      },
+    ],
+  },
   {
     id: "issue-01",
     mode: "issue",
@@ -147,6 +226,56 @@ export const samples: Sample[] = [
       "「きっちり9SSS」のように補正候補が特定できない語句について、" +
       "無理に展開を作らず「不明（要確認）」としている点も、" +
       "入力にない情報を補わないというルールの実践例になっている。",
+    lowConfidenceTerms: [
+      {
+        text: "リフィルのイングレス",
+        confidence: 0.21,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（Traefik Ingressの可能性）。確定情報として扱わない",
+      },
+      {
+        text: "ケースリリース",
+        confidence: 0.25,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（K3s 1.33.3の可能性）。確定情報として扱わない",
+      },
+      {
+        text: "Java事務ならきっちり9SSS取りフィット",
+        confidence: 0.31,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（補正候補を特定できず・要確認）",
+      },
+      {
+        text: "CDの差分",
+        confidence: 0.48,
+        rank: "critical",
+        reason: "略語の誤認識候補（展開不明・勝手に展開しない・要確認）",
+      },
+      {
+        text: "今ポーズアップ-D",
+        confidence: 0.54,
+        rank: "critical",
+        reason: "コマンドの誤認識候補（docker compose up -d / kubectl apply -f の可能性）。断定不可",
+      },
+      {
+        text: "キッチンのリポジトリ",
+        confidence: 0.58,
+        rank: "critical",
+        reason: "固有名詞の誤認識候補（GitHub以外のリポジトリサービス名）。確定情報として扱わない",
+      },
+      {
+        text: "キューブコントロールGETぽつ",
+        confidence: 0.67,
+        rank: "warning",
+        reason: "コマンドの誤認識候補（kubectl get pods の可能性）。断定不可",
+      },
+      {
+        text: "バリアTV",
+        confidence: 0.31,
+        rank: "critical",
+        reason: "技術用語の誤認識候補（補正候補を特定できず・要確認）",
+      },
+    ],
   },
   {
     id: "reflection-01",

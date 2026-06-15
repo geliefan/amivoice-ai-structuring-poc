@@ -61,6 +61,7 @@ export async function POST(
     const structured = await llmClient.structure({
       mode: mode as StructureMode,
       text: transcription.text,
+      lowConfidenceTerms: transcription.lowConfidenceTerms,
     });
 
     if (!structured.markdown.trim()) {
